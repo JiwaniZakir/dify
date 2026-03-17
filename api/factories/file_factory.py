@@ -572,6 +572,7 @@ class StorageKeyLoader:
                     record_id=str(upload_file_row.id),
                     storage_key=upload_file_row.key,
                 )
+                file.storage_key = upload_file_row.key
             elif file.transfer_method == FileTransferMethod.TOOL_FILE:
                 tool_file_row = tool_files.get(model_id)
                 if tool_file_row is None:
@@ -580,3 +581,4 @@ class StorageKeyLoader:
                     record_id=str(tool_file_row.id),
                     storage_key=tool_file_row.file_key,
                 )
+                file.storage_key = tool_file_row.file_key
