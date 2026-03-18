@@ -36,7 +36,6 @@ from dify_graph.nodes.iteration.entities import ErrorHandleMode, IterationNodeDa
 from dify_graph.runtime import VariablePool
 from dify_graph.variables import IntegerVariable, NoneSegment
 from dify_graph.variables.segments import ArrayAnySegment, ArraySegment
-from dify_graph.variables.variables import Variable
 
 from .exc import (
     InvalidIteratorValueError,
@@ -203,11 +202,6 @@ class IterationNode(LLMUsageTrackingMixin, Node[IterationNodeData]):
                     graph_engine=graph_engine,
                 )
 
-                # Sync conversation variables after each iteration completes
-                self._sync_child_variable_snapshot(
-                    self._extract_child_variable_snapshot(variable_pool=graph_engine.graph_runtime_state.variable_pool)
-                )
-
                 # Accumulate usage from this iteration
                 usage_accumulator[0] = self._merge_usage(
                     usage_accumulator[0], graph_engine.graph_runtime_state.llm_usage
@@ -235,7 +229,6 @@ class IterationNode(LLMUsageTrackingMixin, Node[IterationNodeData]):
                         datetime,
                         list[GraphNodeEventBase],
                         object | None,
-                        dict[tuple[str, str], Variable],
                         LLMUsage,
                     ]
                 ],
@@ -260,7 +253,6 @@ class IterationNode(LLMUsageTrackingMixin, Node[IterationNodeData]):
                         iter_start_at,
                         events,
                         output_value,
-                        child_variable_snapshot,
                         iteration_usage,
                     ) = result
 
@@ -274,9 +266,6 @@ class IterationNode(LLMUsageTrackingMixin, Node[IterationNodeData]):
                     iter_run_map[str(index)] = (datetime.now(UTC).replace(tzinfo=None) - iter_start_at).total_seconds()
 
                     usage_accumulator[0] = self._merge_usage(usage_accumulator[0], iteration_usage)
-
-                    # Sync workflow-owned variable scopes after iteration completion
-                    self._sync_child_variable_snapshot(child_variable_snapshot)
 
                 except Exception as e:
                     # Handle errors based on error_handle_mode
@@ -301,7 +290,7 @@ class IterationNode(LLMUsageTrackingMixin, Node[IterationNodeData]):
         index: int,
         item: object,
         execution_context: AbstractContextManager[object],
-    ) -> tuple[datetime, list[GraphNodeEventBase], object | None, dict[tuple[str, str], Variable], LLMUsage]:
+    ) -> tuple[datetime, list[GraphNodeEventBase], object | None, LLMUsage]:
         """Execute a single iteration in parallel mode and return results."""
         with execution_context:
             iter_start_at = datetime.now(UTC).replace(tzinfo=None)
@@ -320,15 +309,11 @@ class IterationNode(LLMUsageTrackingMixin, Node[IterationNodeData]):
 
             # Get the output value from the temporary outputs list
             output_value = outputs_temp[0] if outputs_temp else None
-            child_variable_snapshot = self._extract_child_variable_snapshot(
-                variable_pool=graph_engine.graph_runtime_state.variable_pool
-            )
 
             return (
                 iter_start_at,
                 events,
                 output_value,
-                child_variable_snapshot,
                 graph_engine.graph_runtime_state.llm_usage,
             )
 
@@ -508,26 +493,6 @@ class IterationNode(LLMUsageTrackingMixin, Node[IterationNodeData]):
 
         return variable_mapping
 
-    def _extract_child_variable_snapshot(self, *, variable_pool: VariablePool) -> dict[tuple[str, str], Variable]:
-        snapshot: dict[tuple[str, str], Variable] = {}
-        for node_id in self.graph_init_params.child_sync_variable_node_ids:
-            variables = variable_pool.variable_dictionary.get(node_id, {})
-            for name, variable in variables.items():
-                snapshot[(node_id, name)] = variable.model_copy(deep=True)
-        return snapshot
-
-    def _sync_child_variable_snapshot(self, snapshot: dict[tuple[str, str], Variable]) -> None:
-        parent_pool = self.graph_runtime_state.variable_pool
-        for node_id in self.graph_init_params.child_sync_variable_node_ids:
-            current_keys = set(parent_pool.variable_dictionary.get(node_id, {}))
-            snapshot_keys = {name for scope_node_id, name in snapshot if scope_node_id == node_id}
-
-            for removed_key in current_keys - snapshot_keys:
-                parent_pool.remove((node_id, removed_key))
-
-        for selector, variable in snapshot.items():
-            parent_pool.add(selector, variable)
-
     def _append_iteration_info_to_event(
         self,
         event: GraphNodeEventBase,
@@ -590,7 +555,6 @@ class IterationNode(LLMUsageTrackingMixin, Node[IterationNodeData]):
             graph_config=self.graph_config,
             run_context=self.run_context,
             call_depth=self.workflow_call_depth,
-            child_sync_variable_node_ids=self.graph_init_params.child_sync_variable_node_ids,
         )
         # Create a deep copy of the variable pool for each iteration
         variable_pool_copy = self.graph_runtime_state.variable_pool.model_copy(deep=True)
