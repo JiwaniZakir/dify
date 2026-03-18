@@ -1,7 +1,6 @@
 import logging
 from collections.abc import Generator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, NewType, cast
 
@@ -240,7 +239,6 @@ class IterationNode(LLMUsageTrackingMixin, Node[IterationNodeData]):
                     self._execute_single_iteration_parallel,
                     index=index,
                     item=item,
-                    execution_context=self._capture_execution_context(),
                 )
                 future_to_index[future] = index
 
@@ -289,37 +287,31 @@ class IterationNode(LLMUsageTrackingMixin, Node[IterationNodeData]):
         self,
         index: int,
         item: object,
-        execution_context: AbstractContextManager[object],
     ) -> tuple[datetime, list[GraphNodeEventBase], object | None, LLMUsage]:
         """Execute a single iteration in parallel mode and return results."""
-        with execution_context:
-            iter_start_at = datetime.now(UTC).replace(tzinfo=None)
-            events: list[GraphNodeEventBase] = []
-            outputs_temp: list[object] = []
+        iter_start_at = datetime.now(UTC).replace(tzinfo=None)
+        events: list[GraphNodeEventBase] = []
+        outputs_temp: list[object] = []
 
-            graph_engine = self._create_graph_engine(index, item)
+        graph_engine = self._create_graph_engine(index, item)
 
-            # Collect events instead of yielding them directly
-            for event in self._run_single_iter(
-                variable_pool=graph_engine.graph_runtime_state.variable_pool,
-                outputs=outputs_temp,
-                graph_engine=graph_engine,
-            ):
-                events.append(event)
+        # Collect events instead of yielding them directly
+        for event in self._run_single_iter(
+            variable_pool=graph_engine.graph_runtime_state.variable_pool,
+            outputs=outputs_temp,
+            graph_engine=graph_engine,
+        ):
+            events.append(event)
 
-            # Get the output value from the temporary outputs list
-            output_value = outputs_temp[0] if outputs_temp else None
+        # Get the output value from the temporary outputs list
+        output_value = outputs_temp[0] if outputs_temp else None
 
-            return (
-                iter_start_at,
-                events,
-                output_value,
-                graph_engine.graph_runtime_state.llm_usage,
-            )
-
-    def _capture_execution_context(self) -> AbstractContextManager[object]:
-        """Return the application-supplied execution context for parallel iterations."""
-        return self.graph_runtime_state.execution_context
+        return (
+            iter_start_at,
+            events,
+            output_value,
+            graph_engine.graph_runtime_state.llm_usage,
+        )
 
     def _handle_iteration_success(
         self,
